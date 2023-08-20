@@ -1,9 +1,13 @@
-void setup() {
-  // put your setup code here, to run once:
+int i=0;
 
+void setup(void)
+{
+  Serial.begin(9600);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-
+  i=i+2;
+  i=i-1;
+  Serial.println(i);
+  delay(1000);
 }
