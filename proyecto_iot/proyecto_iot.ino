@@ -202,7 +202,7 @@ void mqtt_connect() {
 
 void check_wifi_and_mqtt() {
   // ... código para comprobar la conexión wifi y mqtt ...
-  connect_wifi();
+  wifi_connect();
   if (WiFi.status() == WL_CONNECTED) && (!client.connected()){
       mqtt_connect();
   }
