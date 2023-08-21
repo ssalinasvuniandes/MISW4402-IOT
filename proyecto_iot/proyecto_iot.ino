@@ -12,6 +12,11 @@
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <DHT_U.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
+#include <PubSubClient.h>
+#include "secrets.h"
+
 
 #define DHTPIN 2     // Digital pin connected to the DHT sensor 
 // Feather HUZZAH ESP8266 note: use pins 3, 4, 5, 12, 13 or 14 --
@@ -31,13 +36,77 @@ WiFiServer server(80);
 
 #define LED D1 // LED
 
+//Conexión a Wifi
+//Nombre de la red Wifi
+const char* ssid = "GOSA";
+//Contraseña de la red Wifi
+const char* password = "GOSA2022";
+
+//Conexión a Mosquitto
+//Usuario uniandes sin @uniandes.edu.co
+#define HOSTNAME "s.salinasv"
+const char MQTT_HOST[] = "iotlab.virtual.uniandes.edu.co";
+const int MQTT_PORT = 8082;
+//Usuario uniandes sin @uniandes.edu.co
+const char MQTT_USER[] = "s.salinasv";
+//Contraseña de MQTT que recibió por correo
+const char MQTT_PASS[] = "202114041";
+const char MQTT_SUB_TOPIC[] = HOSTNAME "/";
+//Tópico al que se enviarán los datos de humedad
+const char MQTT_PUB_TOPIC1[] = "humedad/ciudad/" HOSTNAME;
+//Tópico al que se enviarán los datos de temperatura
+const char MQTT_PUB_TOPIC2[] = "temperatura/ciudad/" HOSTNAME;
+
 uint32_t delayMS;
 int ValueRead=2;
 int myflag=0;
-const char* ssid = "GOSA";
-const char* password = "GOSA2022";
 float Temperature;
 float Humidity;
+time_t now;
+unsigned long lastMillis = 0;
+
+#if (defined(CHECK_PUB_KEY) and defined(CHECK_CA_ROOT)) or (defined(CHECK_PUB_KEY) and defined(CHECK_FINGERPRINT)) or (defined(CHECK_FINGERPRINT) and defined(CHECK_CA_ROOT)) or (defined(CHECK_PUB_KEY) and defined(CHECK_CA_ROOT) and defined(CHECK_FINGERPRINT))
+  #error "cant have both CHECK_CA_ROOT and CHECK_PUB_KEY enabled"
+#endif
+
+BearSSL::WiFiClientSecure net;
+PubSubClient client(net);
+
+
+//Función que conecta el node a través del protocolo MQTT
+//Emplea los datos de usuario y contraseña definidos en MQTT_USER y MQTT_PASS para la conexión
+void mqtt_connect()
+{
+  //Intenta realizar la conexión indefinidamente hasta que lo logre
+  while (!client.connected()) {
+    Serial.print("Time: ");
+    Serial.print(ctime(&now));
+    Serial.print("MQTT connecting ... ");
+    if (client.connect(HOSTNAME, MQTT_USER, MQTT_PASS)) {
+      Serial.println("connected.");
+    } else {
+      Serial.println("Problema con la conexión, revise los valores de las constantes MQTT");
+      Serial.print("Código de error = ");
+      Serial.println(client.state());
+      if ( client.state() == MQTT_CONNECT_UNAUTHORIZED ) {
+        ESP.deepSleep(0);
+      }
+      /* Espera 5 segundos antes de volver a intentar */
+      delay(5000);
+    }
+  }
+}
+
+void receivedCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Received [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+}
+
+
 
 void setup()
 {
@@ -79,79 +148,93 @@ void setup()
   Serial.print("Connecting to ");
   Serial.println(ssid);
 
+  WiFi.hostname(HOSTNAME);
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    if ( WiFi.status() == WL_NO_SSID_AVAIL || WiFi.status() == WL_WRONG_PASSWORD ) {
+      Serial.print("\nProblema con la conexión, revise los valores de las constantes ssid y pass");
+      ESP.deepSleep(0);
+    } else if ( WiFi.status() == WL_CONNECT_FAILED ) {
+      Serial.print("\nNo se ha logrado conectar con la red, resetee el node y vuelva a intentar");
+      ESP.deepSleep(0);
+    }
     Serial.print(".");
+    delay(1000);
   }
   Serial.println("");
   Serial.println("WiFi connected");
 
-  // Start the server
-  server.begin();
-  Serial.println("Server started");
+  //Sincroniza la hora del dispositivo con el servidor SNTP (Simple Network Time Protocol)
+  Serial.println("");
+  Serial.print("Setting time using SNTP");
+  configTime(-5 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  now = time(nullptr);
+  while (now < 1510592825) {
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+  }
+  Serial.println("done!");
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
+  //Una vez obtiene la hora, imprime en el monitor el tiempo actual
+  Serial.print("Current time: ");
+  Serial.print(asctime(&timeinfo));
 
-  // Print the IP address
-  Serial.print("Use this URL to connect: ");
-  Serial.print("http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("/");
+
+  #ifdef CHECK_CA_ROOT
+    BearSSL::X509List cert(digicert);
+    net.setTrustAnchors(&cert);
+  #endif
+  #ifdef CHECK_PUB_KEY
+    BearSSL::PublicKey key(pubkey);
+    net.setKnownKey(&key);
+  #endif
+  #ifdef CHECK_FINGERPRINT
+    net.setFingerprint(fp);
+  #endif
+  #if (!defined(CHECK_PUB_KEY) and !defined(CHECK_CA_ROOT) and !defined(CHECK_FINGERPRINT))
+    net.setInsecure();
+  #endif
+
+  //Llama a funciones de la librería PubSubClient para configurar la conexión con Mosquitto
+  client.setServer(MQTT_HOST, MQTT_PORT);
+  client.setCallback(receivedCallback);
+  //Llama a la función de este programa que realiza la conexión con Mosquitto
+  mqtt_connect();
 
 }
 
+//Función loop que se ejecuta indefinidamente repitiendo el código a su interior
+//Cada vez que se ejecuta toma nuevos datos de la lectura del sensor
 void loop()
 {
-  // Check if a client has connected
-  WiFiClient client = server.available();
-  if (!client) {
-    return;
+  //Revisa que la conexión Wifi y MQTT siga activa
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print("Checking wifi");
+    while (WiFi.waitForConnectResult() != WL_CONNECTED)
+    {
+      WiFi.begin(ssid, pass);
+      Serial.print(".");
+      delay(10);
+    }
+    Serial.println("connected");
   }
-
-  // Wait until the client sends some data
-  Serial.println("new client");
-  while(!client.available()){
-    delay(1);
-  }
-
-  // Read the first line of the request
-  String request = client.readStringUntil('\r');
-  Serial.println(request);
-  client.flush();
-
-  // Match the request
-
-  int value = HIGH;
-  if (request.indexOf("/LED=ON") != -1)  {
-    digitalWrite(LED, HIGH);
-    Serial.println("Prendido");
-    value = HIGH;
-  }
-  if (request.indexOf("/LED=OFF") != -1)  {
-    digitalWrite(LED, LOW);
-    Serial.println("Apagado");
-    value = LOW;
+  else
+  {
+    if (!client.connected())
+    {
+      mqtt_connect();
+    }
+    else
+    {
+      client.loop();
+    }
   }
   
-  // Return the response
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: text/html");
-  client.println(""); //  do not forget this one
-  client.println("<!DOCTYPE HTML>");
-  client.println("<html>");
-  
-  client.print("LED is now: ");
-  
-  if(value == LOW) {
-  client.print("Off");
-  } else {
-  client.print("On");
-  }
-  client.println("<br><br>");
-  client.println("<a href=\"/LED=ON\"\"><button>Turn On </button></a>");
-  client.println("<a href=\"/LED=OFF\"\"><button>Turn Off </button></a><br />");
-  client.println("</html>");
-
   // Get temperature event and print its value.
   sensors_event_t event;
   dht.temperature().getEvent(&event);
@@ -166,11 +249,6 @@ void loop()
     Serial.println(F("°C"));
   }
 
-  client.println("<br><br>");
-  client.print("Temperature: ");
-  client.print(Temperature);
-  client.print("C");
-
   // Get humidity event and print its value.
   dht.humidity().getEvent(&event);
   if (isnan(event.relative_humidity)) {
@@ -184,13 +262,36 @@ void loop()
     Serial.println(F("%"));
   }
 
-  client.println("<br><br>");
-  client.print("Humidity: ");
-  client.print(Humidity);
-  client.print("%");
+  now = time(nullptr);
+  //Transforma la información a la notación JSON para poder enviar los datos 
+  //El mensaje que se envía es de la forma {"value": x}, donde x es el valor de temperatura o humedad
+  
+  //JSON para humedad
+  String json = "{\"value\": "+ String(Humidity) + "}";
+  char payload1[json.length()+1];
+  json.toCharArray(payload1,json.length()+1);
+  //JSON para temperatura
+  json = "{\"value\": "+ String(Temperature) + "}";
+  char payload2[json.length()+1];
+  json.toCharArray(payload2,json.length()+1);
 
-  delay(1);
-  Serial.println("Client disconnected");
-  Serial.println("");
- 
+  //Si los valores recolectados no son indefinidos, se envían a los tópicos correspondientes
+  if ( Humidity!=-99 && Temperature!=-99 ) {
+    //Publica en el tópico de la humedad
+    client.publish(MQTT_PUB_TOPIC1, payload1, false);
+    //Publica en el tópico de la temperatura
+    client.publish(MQTT_PUB_TOPIC2, payload2, false);
+  }
+
+  //Imprime en el monitor serial la información recolectada
+  Serial.print(MQTT_PUB_TOPIC1);
+  Serial.print(" -> ");
+  Serial.println(payload1);
+  Serial.print(MQTT_PUB_TOPIC2);
+  Serial.print(" -> ");
+  Serial.println(payload2);
+
+  // Delay between measurements.
+  delay(delayMS);
+
 }
