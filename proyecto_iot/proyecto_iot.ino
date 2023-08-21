@@ -241,7 +241,7 @@ float read_humidity() {
   else {
     Serial.print(F("Humidity: "));
     h = event.relative_humidity;
-    Serial.print(Humidity);
+    Serial.print(h);
     Serial.println(F("%"));
   }
 }
