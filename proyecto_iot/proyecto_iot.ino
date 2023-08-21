@@ -53,9 +53,9 @@ const char MQTT_USER[] = "s.salinasv";
 const char MQTT_PASS[] = "202114041";
 const char MQTT_SUB_TOPIC[] = HOSTNAME "/";
 //Tópico al que se enviarán los datos de humedad
-const char MQTT_PUB_TOPIC1[] = "humedad/ciudad/" HOSTNAME;
+const char MQTT_PUB_TOPIC1[] = "humedad/san_jose_del_guaviare/" HOSTNAME;
 //Tópico al que se enviarán los datos de temperatura
-const char MQTT_PUB_TOPIC2[] = "temperatura/ciudad/" HOSTNAME;
+const char MQTT_PUB_TOPIC2[] = "temperatura/san_jose_del_guaviare/" HOSTNAME;
 
 uint32_t delayMS;
 int ValueRead=2;
@@ -217,7 +217,7 @@ void loop()
     Serial.print("Checking wifi");
     while (WiFi.waitForConnectResult() != WL_CONNECTED)
     {
-      WiFi.begin(ssid, pass);
+      WiFi.begin(ssid, password);
       Serial.print(".");
       delay(10);
     }
