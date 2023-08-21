@@ -5,13 +5,13 @@
 #include <WiFiClientSecure.h>
 #include <time.h>
 #include <PubSubClient.h>
-#include "secrets.h"
 
 // -----------------------------------------------------------------------------------------------
 
 #define DHTPIN 2
 #define DHTTYPE DHT11
 #define HOSTNAME "s.salinasv"
+#define MSG_BUFFER_SIZE	(50)
 
 // -----------------------------------------------------------------------------------------------
 
@@ -29,10 +29,46 @@ const char MQTT_PUB_TOPIC3[] = "luminosidad/san_jose_del_guaviare/" HOSTNAME;
 
 // -----------------------------------------------------------------------------------------------
 
+static const char ca_cert[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIELTCCAxWgAwIBAgIUJ8xk/cM+iJs1Gj2vIv7y/o+XXWswDQYJKoZIhvcNAQEL
+BQAwgaUxCzAJBgNVBAYTAkNPMQ8wDQYDVQQIDAZCb2dvdGExDzANBgNVBAcMBkJv
+Z290YTERMA8GA1UECgwIVW5pYW5kZXMxDTALBgNVBAsMBERJU0MxJzAlBgNVBAMM
+HmlvdGxhYi52aXJ0dWFsLnVuaWFuZGVzLmVkdS5jbzEpMCcGCSqGSIb3DQEJARYa
+amEuYXZlbGlub0B1bmlhbmRlcy5lZHUuY28wHhcNMjEwODEzMTIyNzM1WhcNMjYw
+ODEzMTIyNzM1WjCBpTELMAkGA1UEBhMCQ08xDzANBgNVBAgMBkJvZ290YTEPMA0G
+A1UEBwwGQm9nb3RhMREwDwYDVQQKDAhVbmlhbmRlczENMAsGA1UECwwERElTQzEn
+MCUGA1UEAwweaW90bGFiLnZpcnR1YWwudW5pYW5kZXMuZWR1LmNvMSkwJwYJKoZI
+hvcNAQkBFhpqYS5hdmVsaW5vQHVuaWFuZGVzLmVkdS5jbzCCASIwDQYJKoZIhvcN
+AQEBBQADggEPADCCAQoCggEBALpldL3rYIreRyElh74XURq5PyVHeZ8raK9l1Bh7
+fdojzXMWZsXLT5AQyj7Xpyv/rQ5rmnxG/Yn5uqQuOGZy2e+YogWD/AiUC6Dt9BTM
+35HZurGcC1RYVLbWzZsxoX53aj82PAkwKwAsc3WO61GiFjGMJqeEYdiq4UwsrHqs
+JRKDt2HUsqMUwv/Av8QNWgqLZtvfHtRuE9Xzu8FyL2nukQGkXdHBMQQsLOo+h0Nk
+iwcYPDMvOy+rf83frEj4h8mXrR3PMHgpIybn89LOv0VUAKrDeVQJJTJPWBObx3Yv
+nd2SvzJ8Q++rYk+SpRXBVhcBNExpzx4NsqRqh6Nino1Co+MCAwEAAaNTMFEwHQYD
+VR0OBBYEFLe0Qac+cffaxvYBdQWk2QH2v3cUMB8GA1UdIwQYMBaAFLe0Qac+cffa
+xvYBdQWk2QH2v3cUMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEB
+AFIDE2Xfm0YC8edGvSqMYxTbNz/3fvmM2149lScKTHQrifN6kOOuGe26+tWgvjvx
+KLAsox4GpTVokpyswt7Glr+l0l9UEC5BPqqr5pFEo8MWhAoH5y4NDFzVG6Jkf0i2
+tYlQghdEslXV/r6FM4liAIc4CHdxUuvazAehT4JDcQkTmr3swNbF33L/JmTiZ5Ny
+gymNUIVxbvQGUXOEwE4fId9e/Uoz7RcytOB9ZGvfb/FKZy69uHe1wavaZRA92W6d
+FmcFfve/R1nmeJNDSIZBtXjDvnkuF5dygOBPHibvxIU49+iZD4YJvVrFV66L1xzW
+1+SB2xn2cip+HG79iGsqrwc=
+-----END CERTIFICATE-----
+)EOF";
+
+// -----------------------------------------------------------------------------------------------
+
 uint32_t delayMS;
 int ValueRead=2;
 int myflag=0;
 unsigned long lastMillis = 0;
+unsigned long lastMsg = 0;
+char msg[MSG_BUFFER_SIZE];
+int value = 0;
+
+// -----------------------------------------------------------------------------------------------
+
 sensor_t sensor;
 sensors_event_t event;
 time_t now;
@@ -40,8 +76,8 @@ time_t now;
 // -----------------------------------------------------------------------------------------------
 
 DHT_Unified dht(DHTPIN, DHTTYPE);
-BearSSL::WiFiClientSecure net;
-PubSubClient client(net);
+BearSSL::WiFiClientSecure espClient;
+PubSubClient client(espClient);
 
 // -----------------------------------------------------------------------------------------------
 
@@ -52,22 +88,22 @@ void setup_dht() {
   dht.temperature().getSensor(&sensor);
   Serial.println(F("------------------------------------"));
   Serial.println(F("Temperature Sensor"));
-  Serial.print  (F("Sensor Type: ")); Serial.println(sensor.name);
-  Serial.print  (F("Driver Ver:  ")); Serial.println(sensor.version);
-  Serial.print  (F("Unique ID:   ")); Serial.println(sensor.sensor_id);
-  Serial.print  (F("Max Value:   ")); Serial.print(sensor.max_value); Serial.println(F("°C"));
-  Serial.print  (F("Min Value:   ")); Serial.print(sensor.min_value); Serial.println(F("°C"));
-  Serial.print  (F("Resolution:  ")); Serial.print(sensor.resolution); Serial.println(F("°C"));
+  Serial.print(F("Sensor Type: ")); Serial.println(sensor.name);
+  Serial.print(F("Driver Ver:  ")); Serial.println(sensor.version);
+  Serial.print(F("Unique ID:   ")); Serial.println(sensor.sensor_id);
+  Serial.print(F("Max Value:   ")); Serial.print(sensor.max_value); Serial.println(F("°C"));
+  Serial.print(F("Min Value:   ")); Serial.print(sensor.min_value); Serial.println(F("°C"));
+  Serial.print(F("Resolution:  ")); Serial.print(sensor.resolution); Serial.println(F("°C"));
   Serial.println(F("------------------------------------"));
   // Print humidity sensor details.
   dht.humidity().getSensor(&sensor);
   Serial.println(F("Humidity Sensor"));
-  Serial.print  (F("Sensor Type: ")); Serial.println(sensor.name);
-  Serial.print  (F("Driver Ver:  ")); Serial.println(sensor.version);
-  Serial.print  (F("Unique ID:   ")); Serial.println(sensor.sensor_id);
-  Serial.print  (F("Max Value:   ")); Serial.print(sensor.max_value); Serial.println(F("%"));
-  Serial.print  (F("Min Value:   ")); Serial.print(sensor.min_value); Serial.println(F("%"));
-  Serial.print  (F("Resolution:  ")); Serial.print(sensor.resolution); Serial.println(F("%"));
+  Serial.print(F("Sensor Type: ")); Serial.println(sensor.name);
+  Serial.print(F("Driver Ver:  ")); Serial.println(sensor.version);
+  Serial.print(F("Unique ID:   ")); Serial.println(sensor.sensor_id);
+  Serial.print(F("Max Value:   ")); Serial.print(sensor.max_value); Serial.println(F("%"));
+  Serial.print(F("Min Value:   ")); Serial.print(sensor.min_value); Serial.println(F("%"));
+  Serial.print(F("Resolution:  ")); Serial.print(sensor.resolution); Serial.println(F("%"));
   Serial.println(F("------------------------------------"));
   // Set delay between sensor readings based on sensor details.
   delayMS = sensor.min_delay / 1000;
@@ -75,37 +111,25 @@ void setup_dht() {
 
 // -----------------------------------------------------------------------------------------------
 
-void setup_wifi() {
+void wifi_connect() {
   // ... código para configurar wifi ...
-  Serial.print("Setting WiFi");
+  Serial.println("Setting WiFi");
   WiFi.hostname(HOSTNAME);
   WiFi.mode(WIFI_STA);
-}
-
-// -----------------------------------------------------------------------------------------------
-
-void wifi_connect() {
   // ... código para conectarse a wifi ...
-  Serial.print("WiFi Connect");
+  Serial.println("WiFi Connect");
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.print("Time: ");
-    Serial.print(ctime(&now));
-    Serial.print("WiFi connecting ... ");
+    Serial.print("Connecting to WiFi ..");
     WiFi.begin(ssid, password);
 
-    if ( WiFi.status() == WL_NO_SSID_AVAIL || WiFi.status() == WL_WRONG_PASSWORD ) {
-      Serial.print("\nProblema con la conexión, revise los valores de las constantes ssid y pass");
-      ESP.deepSleep(0);
-    } else if ( WiFi.status() == WL_CONNECT_FAILED ) {
-      Serial.print("\nNo se ha logrado conectar con la red, resetee el node y vuelva a intentar");
-      ESP.deepSleep(0);
-    } else if ( WiFi.status() == WL_CONNECTED) {
-      Serial.println("");
-      Serial.println("WiFi connected!");
+    while (WiFi.status() != WL_CONNECTED) {
+      Serial.print('.');
+      delay(1000);
     }
-  } else {
-    Serial.println("WiFi connected!");
-  }
+    
+    Serial.print("RSSI: ");
+    Serial.println(WiFi.RSSI());
+    Serial.println(WiFi.localIP());}
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -123,69 +147,40 @@ void setup_ntp() {
   struct tm timeinfo;
   gmtime_r(&now, &timeinfo);
   //Una vez obtiene la hora, imprime en el monitor el tiempo actual
-  Serial.print("Current time: ");
-  Serial.print(asctime(&timeinfo));
   Serial.println("");
+  Serial.print("Current time: ");
+  Serial.println(asctime(&timeinfo));
   Serial.println("SNTP done!");
 }
 
 // -----------------------------------------------------------------------------------------------
 
 void receivedCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Received [");
+  Serial.print("Message arrived [");
   Serial.print(topic);
-  Serial.print("]: ");
+  Serial.print("] ");
   for (int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
   }
-}
-
-// -----------------------------------------------------------------------------------------------
-
-void setup_mqtt() {
-  // ... código para configurar mqtt ...
-  Serial.print("Setting MQTT");
-  #if (defined(CHECK_PUB_KEY) and defined(CHECK_CA_ROOT)) or (defined(CHECK_PUB_KEY) and defined(CHECK_FINGERPRINT)) or (defined(CHECK_FINGERPRINT) and defined(CHECK_CA_ROOT)) or (defined(CHECK_PUB_KEY) and defined(CHECK_CA_ROOT) and defined(CHECK_FINGERPRINT))
-    #error "cant have both CHECK_CA_ROOT and CHECK_PUB_KEY enabled"
-  #endif
-  #ifdef CHECK_CA_ROOT
-    BearSSL::X509List cert(digicert);
-    net.setTrustAnchors(&cert);
-  #endif
-  #ifdef CHECK_PUB_KEY
-    BearSSL::PublicKey key(pubkey);
-    net.setKnownKey(&key);
-  #endif
-  #ifdef CHECK_FINGERPRINT
-    net.setFingerprint(fp);
-  #endif
-  #if (!defined(CHECK_PUB_KEY) and !defined(CHECK_CA_ROOT) and !defined(CHECK_FINGERPRINT))
-    net.setInsecure();
-  #endif
-
-  //Llama a funciones de la librería PubSubClient para configurar la conexión con Mosquitto
-  client.setServer(MQTT_HOST, MQTT_PORT);
-  client.setCallback(receivedCallback);
+  Serial.println();
 }
 
 // -----------------------------------------------------------------------------------------------
 
 void mqtt_connect() {
   Serial.println(F("MQTT Connect"));
+  char err_buf[256];
   if (!client.connected()) {
-    Serial.print("Time: ");
-    Serial.print(ctime(&now));
-    Serial.print("MQTT connecting ... ");
-
+    Serial.println("Attempting MQTT connection ... ");
     if (client.connect(HOSTNAME, MQTT_USER, MQTT_PASS)) {
       Serial.println("connected.");
     } else {
       Serial.println("Connection failed");
-      Serial.println("State error: ");
+      Serial.print("State error: ");
       Serial.println(client.state());
       /* -4 : MQTT_CONNECTION_TIMEOUT - the server didn't respond within the keepalive time
-         -3 : MQTT_CONNECTION_LOST - the network connection was broken
-         -2 : MQTT_CONNECT_FAILED - the network connection failed
+         -3 : MQTT_CONNECTION_LOST - the espClientwork connection was broken
+         -2 : MQTT_CONNECT_FAILED - the espClientwork connection failed
          -1 : MQTT_DISCONNECTED - the client is disconnected cleanly
          0 : MQTT_CONNECTED - the client is connected
          1 : MQTT_CONNECT_BAD_PROTOCOL - the server doesn't support the requested version of MQTT
@@ -194,6 +189,10 @@ void mqtt_connect() {
          4 : MQTT_CONNECT_BAD_CREDENTIALS - the username/password were rejected
          5 : MQTT_CONNECT_UNAUTHORIZED - the client was not authorized to connect
       */
+      espClient.getLastSSLError(err_buf, sizeof(err_buf));
+      Serial.print("SSL error: ");
+      Serial.println(err_buf);
+      delay(5000);
     }
   }
 }
@@ -202,10 +201,15 @@ void mqtt_connect() {
 
 void check_wifi_and_mqtt() {
   // ... código para comprobar la conexión wifi y mqtt ...
-  wifi_connect();
-  if (WiFi.status() == WL_CONNECTED && !client.connected()){
+  Serial.println(F("Checking WiFi and MQQT connection ..."));
+  if (WiFi.status() != WL_CONNECTED){
+    wifi_connect();  
+  }
+  if (!client.connected()){
       mqtt_connect();
   }
+  client.loop();
+  Serial.println(F("done !"));
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -296,24 +300,24 @@ void publish_data(float temperature, float humidity, float luminosity) {
   char payload3[json.length()+1];
   json.toCharArray(payload3, json.length()+1);
 
-  //Publica en el tópico de la temperatura
-  client.publish(MQTT_PUB_TOPIC1, payload1, false);
-  //Publica en el tópico de la humedad
-  client.publish(MQTT_PUB_TOPIC2, payload2, false);
-  //Publica en el tópico de la luz
-  client.publish(MQTT_PUB_TOPIC3, payload3, false);
-
-  //Imprime en el monitor serial la información recolectada
-  Serial.print(MQTT_PUB_TOPIC1);
-  Serial.print(" -> ");
-  Serial.println(payload1);
-  Serial.print(MQTT_PUB_TOPIC2);
-  Serial.print(" -> ");
-  Serial.println(payload2);
-  Serial.print(MQTT_PUB_TOPIC3);
-  Serial.print(" -> ");
-  Serial.println(payload3);
-
+  if (!client.connected()){
+    //Publica en el tópico de la temperatura
+    client.publish(MQTT_PUB_TOPIC1, payload1, false);
+    //Publica en el tópico de la humedad
+    client.publish(MQTT_PUB_TOPIC2, payload2, false);
+    //Publica en el tópico de la luz
+    client.publish(MQTT_PUB_TOPIC3, payload3, false);
+    //Imprime en el monitor serial la información recolectada
+    Serial.print(MQTT_PUB_TOPIC1);
+    Serial.print(" -> ");
+    Serial.println(payload1);
+    Serial.print(MQTT_PUB_TOPIC2);
+    Serial.print(" -> ");
+    Serial.println(payload2);
+    Serial.print(MQTT_PUB_TOPIC3);
+    Serial.print(" -> ");
+    Serial.println(payload3);
+  }
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -322,11 +326,12 @@ void setup() {
   Serial.begin(9600);
   dht.begin();
   setup_dht();
-  setup_wifi();
+  BearSSL::X509List *serverTrustedCA = new BearSSL::X509List(ca_cert);
+  espClient.setTrustAnchors(serverTrustedCA);
   wifi_connect();
   setup_ntp();
-  setup_mqtt();
-  mqtt_connect();
+  client.setServer(MQTT_HOST, MQTT_PORT);
+  client.setCallback(receivedCallback);
 }
 
 // -----------------------------------------------------------------------------------------------
