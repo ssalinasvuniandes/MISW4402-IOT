@@ -203,7 +203,7 @@ void mqtt_connect() {
 void check_wifi_and_mqtt() {
   // ... código para comprobar la conexión wifi y mqtt ...
   wifi_connect();
-  if (WiFi.status() == WL_CONNECTED) && (!client.connected()){
+  if (WiFi.status() == WL_CONNECTED && !client.connected()){
       mqtt_connect();
   }
 }
@@ -237,13 +237,13 @@ float read_humidity() {
   if (isnan(event.relative_humidity)) {
     Serial.println(F("Error reading humidity!"));
     h = -99.0;
-  }
-  else {
+  } else {
     Serial.print(F("Humidity: "));
     h = event.relative_humidity;
     Serial.print(h);
     Serial.println(F("%"));
   }
+  return h;
 }
 
 // -----------------------------------------------------------------------------------------------
